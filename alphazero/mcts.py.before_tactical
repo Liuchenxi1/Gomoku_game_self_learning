@@ -1,0 +1,101 @@
+"""PUCT Monte Carlo tree search with alternating-player values."""
+from __future__ import annotations
+from dataclasses import dataclass, field
+import math
+import numpy as np
+import torch
+
+@dataclass
+class Node:
+    prior: float = 1.0
+    visits: int = 0
+    total_value: float = 0.0  # from perspective of player at node's parent
+    children: dict[int, 'Node'] = field(default_factory=dict)
+
+    @property
+    def mean_value(self):
+        return self.total_value / self.visits if self.visits else 0.0
+
+class MCTS:
+    def __init__(self, model, device, simulations=100, c_puct=1.5, seed=None):
+        if simulations < 1:
+            raise ValueError('simulations must be >= 1')
+        self.model, self.device = model, device
+        self.simulations, self.c_puct = simulations, c_puct
+        self.rng = np.random.default_rng(seed)
+
+    @torch.inference_mode()
+    def _evaluate(self, env):
+        x = torch.from_numpy(env.observation()[None]).to(self.device)
+        was_training = self.model.training
+        self.model.eval()
+        logits, value = self.model(x)
+        if was_training:
+            self.model.train()
+        logits = logits[0].float().cpu().numpy()
+        legal = env.legal_moves()
+        z = logits[legal] - logits[legal].max()
+        p = np.exp(z)
+        p /= p.sum()
+        return dict(zip(legal.tolist(), p.tolist())), float(value.item())
+
+    def search(self, env, temperature=1.0, add_noise=False):
+        if env.terminated:
+            raise ValueError('Cannot search a finished game')
+        root = Node()
+        priors, _ = self._evaluate(env)
+        if add_noise and len(priors) > 1:
+            actions = list(priors)
+            noise = self.rng.dirichlet([0.3] * len(actions))
+            priors = {a: 0.75 * priors[a] + 0.25 * float(n) for a, n in zip(actions, noise)}
+        root.children = {a: Node(prior=p) for a, p in priors.items()}
+
+        for _ in range(self.simulations):
+            # The search tree must never mutate the caller's live environment.
+            sim = env.__class__(env.size, env.win_length)
+            sim.board = env.board.copy()
+            sim.current_player = env.current_player
+            sim.move_count = env.move_count
+            sim.terminated = env.terminated
+            sim.winner = env.winner
+            sim.last_move = env.last_move
+            node = root
+            path = []
+            while node.children:
+                parent_visits = max(1, node.visits)
+                action, child = max(node.children.items(), key=lambda kv: (
+                    -kv[1].mean_value + self.c_puct * kv[1].prior * math.sqrt(parent_visits) / (1 + kv[1].visits)
+                ))
+                mover = sim.current_player
+                result = sim.step(action)
+                path.append((node, child))
+                node = child
+                if result.terminated:
+                    # Leaf value from viewpoint of side that would play next.
+                    value = 0.0 if result.winner == 0 else -1.0
+                    break
+            else:
+                if not path:
+                    raise RuntimeError('Search root has no legal moves')
+                priors, value = self._evaluate(sim)
+                node.children = {a: Node(prior=p) for a, p in priors.items()}
+
+            # value is from perspective at leaf; invert at each parent level.
+            for parent, child in reversed(path):
+                value = -value
+                child.visits += 1
+                # Node value is stored from *child player* perspective; selection uses negative.
+                child.total_value += -value
+                parent.visits += 1
+
+        counts = np.zeros(env.size * env.size, dtype=np.float64)
+        for action, child in root.children.items():
+            counts[action] = child.visits
+        if temperature <= 1e-8:
+            probs = np.zeros_like(counts)
+            probs[np.argmax(counts)] = 1.0
+        else:
+            counts = counts ** (1.0 / temperature)
+            probs = counts / counts.sum()
+        action = int(self.rng.choice(len(probs), p=probs))
+        return action, probs.astype(np.float32)

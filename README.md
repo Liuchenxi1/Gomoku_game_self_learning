@@ -1,9 +1,7 @@
 # Gomoku-Zero
+Inspired by the google AlphaGo project **AlphaZero-style Gomoku AI** built with Python and PyTorch. The project includes a Gomoku environment, a policy/value neural network, Monte Carlo Tree Search (MCTS), self-play training, terminal play, and an optional Playwright adapter for playing on PaperGames.io.
 
-An educational **AlphaZero-style Gomoku AI** built with Python and PyTorch. The project includes a Gomoku environment, a policy/value neural network, Monte Carlo Tree Search (MCTS), self-play training, terminal play, and an optional Playwright adapter for playing on PaperGames.io.
-
-> **Project status:** This is a learning and experimentation project, not a state-of-the-art Gomoku engine. Playing strength depends on the training checkpoint, search budget, and position. Online browser integration depends on PaperGames.io's current page structure and has not been validated against every game state.
-
+> **Project status:** This is a learning and experimentation project, it develops a self-learning rebot to play Gomuku game as like AlphaGo. The trained model currently is not very smart enough to win the online-bot. However it understands the board and rules of winning.
 ## Features
 
 - **Gomoku environment:** board state, legal moves, turn handling, and five-in-a-row win detection.
